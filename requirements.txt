@@ -1,0 +1,9 @@
+fastapi 
+uvicorn 
+sentence-transformers 
+faiss-cpu 
+pygithub 
+python-dotenv
+chromadb
+langchain-text-splitters
+google-genai
