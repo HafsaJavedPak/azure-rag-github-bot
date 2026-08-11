@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.models.schemas import RepoCreateRequest
-from app.ingestion.pipeline import ingest_repo
+from app.ingestion.pipeline import ingest_repo, resync_repo_incremental
 from app.storage import db
 from app.storage.vector_store import delete_repo as delete_repo_vectors
 
@@ -39,12 +39,14 @@ def resync_repo(repo_id: str, background_tasks: BackgroundTasks):
     if not repo:
         raise HTTPException(status_code=404, detail="Repo not found")
 
-    # Simplest version, per plan: just re-run the whole ingestion pipeline
-    # for this repo rather than diffing changed files — same background-task
-    # shape as POST /repos, but reusing the existing repo_id (and owner/name
-    # already on file) so any conversations pointed at it stay valid.
+    # Diff-based re-sync: only re-processes files that actually changed
+    # since the last successful sync (falls back to a full re-ingest when
+    # that isn't possible — see resync_repo_incremental's docstring). Same
+    # background-task shape as POST /repos, but reusing the existing
+    # repo_id (and owner/name already on file) so any conversations
+    # pointed at it stay valid.
     db.mark_pending(repo_id)
-    background_tasks.add_task(ingest_repo, repo_id, repo["owner"], repo["name"])
+    background_tasks.add_task(resync_repo_incremental, repo_id, repo["owner"], repo["name"])
 
     return {"repo_id": repo_id, "status": "pending"}
 

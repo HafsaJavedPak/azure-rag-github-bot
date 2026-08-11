@@ -51,6 +51,14 @@ def _init_db():
             updated_at TEXT NOT NULL
         )
     """)
+
+    # Lightweight migration — CREATE TABLE IF NOT EXISTS above doesn't add
+    # columns to a repos table that already existed before this feature, so
+    # a real repos.db from an earlier run needs this column added explicitly.
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(repos)").fetchall()}
+    if "last_indexed_sha" not in existing_columns:
+        conn.execute("ALTER TABLE repos ADD COLUMN last_indexed_sha TEXT")
+
     conn.commit()
     conn.close()
 
@@ -81,12 +89,28 @@ def mark_pending(repo_id: str) -> None:
     conn.close()
 
 
-def mark_completed(repo_id: str, file_count: int, chunk_count: int) -> None:
+def mark_completed(
+    repo_id: str, file_count: int, chunk_count: int, last_indexed_sha: str | None = None
+) -> None:
     conn = _get_connection()
-    conn.execute(
-        "UPDATE repos SET status = ?, file_count = ?, chunk_count = ?, indexed_at = ?, error_message = NULL WHERE repo_id = ?",
-        ("completed", file_count, chunk_count, datetime.utcnow().isoformat(), repo_id),
-    )
+    if last_indexed_sha is not None:
+        conn.execute(
+            "UPDATE repos SET status = ?, file_count = ?, chunk_count = ?, indexed_at = ?, "
+            "error_message = NULL, last_indexed_sha = ? WHERE repo_id = ?",
+            (
+                "completed",
+                file_count,
+                chunk_count,
+                datetime.utcnow().isoformat(),
+                last_indexed_sha,
+                repo_id,
+            ),
+        )
+    else:
+        conn.execute(
+            "UPDATE repos SET status = ?, file_count = ?, chunk_count = ?, indexed_at = ?, error_message = NULL WHERE repo_id = ?",
+            ("completed", file_count, chunk_count, datetime.utcnow().isoformat(), repo_id),
+        )
     conn.commit()
     conn.close()
 

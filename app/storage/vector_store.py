@@ -63,3 +63,21 @@ def search(question: str, repo_id: str | None = None, n_results: int = 5) -> lis
 def delete_repo(repo_id: str) -> None:
     """Removes every chunk belonging to a repo in one call via metadata filter."""
     collection.delete(where={"repo_id": repo_id})
+
+
+def delete_chunks_by_path(repo_id: str, path: str) -> None:
+    """The surgical counterpart to delete_repo() — removes just the vectors
+    for one file within a repo, used by incremental re-sync so unrelated
+    files' vectors are never touched. A no-op if that path was never
+    actually indexed (e.g. it was previously filtered out)."""
+    collection.delete(where={"$and": [{"repo_id": repo_id}, {"path": path}]})
+
+
+def get_repo_stats(repo_id: str) -> dict:
+    """Derives current file_count/chunk_count straight from what's actually
+    stored, rather than incrementally maintaining counters through a series
+    of per-file adds/deletes — avoids drift if an incremental sync fails
+    partway through."""
+    results = collection.get(where={"repo_id": repo_id}, limit=100000)
+    paths = {meta["path"] for meta in results["metadatas"]}
+    return {"file_count": len(paths), "chunk_count": len(results["ids"])}

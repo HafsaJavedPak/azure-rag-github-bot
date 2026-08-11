@@ -1,52 +1,48 @@
 # app/ingestion/chunker.py
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-# pip install langchain-text-splitters
-# (lighter-weight than pulling in all of `langchain` — just the splitter)
+from app.ingestion import ast_chunker
+from app.ingestion.text_chunker import split_text
 
 
 def chunk_file(path: str, content: str, chunk_size: int = 600, overlap: int = 100) -> list[dict]:
     """
-    Split a single file's content into overlapping chunks ready for embedding.
+    Split a single file's content into chunks ready for embedding.
 
-    Sizing rationale (settled earlier):
-    - chunk_size=600 chars approximates staying safely under the embedding
-      model's 256-token limit, using ~4 chars/token as a rough guide for
-      English text — with headroom built in, since code tends to tokenize
-      denser than prose (lots of short symbol/operator tokens).
-    - overlap=100 chars (~17% of chunk_size) keeps content that straddles a
-      boundary intact in at least one chunk, without creating so much
-      duplication that top-k retrieval fills up with near-identical chunks.
+    Tries AST-aware chunking first (app/ingestion/ast_chunker.py) — whole
+    functions/classes as chunks, for the languages it has a grammar wired
+    up for. Falls back to the plain fixed-size character splitter
+    (app/ingestion/text_chunker.py) for anything else: unsupported
+    languages, non-code files like README/YAML/JSON, or a file that fails
+    to parse. This keeps the fallback behavior identical to what every
+    file got before AST chunking existed — no regression for the files
+    that don't have a grammar yet.
 
     Args:
         path: file's path within the repo — carried as metadata for later
-              filtering (by repo_id/file) and for deletion when a repo is removed.
+              filtering (by repo_id/file) and for deletion when a repo is
+              removed or a file changes.
         content: full text content of the file.
-        chunk_size: target chunk size in characters.
-        overlap: characters shared between consecutive chunks.
+        chunk_size: target chunk size in characters (also the budget AST
+              chunking uses to decide whether a node is "oversized").
+        overlap: characters shared between consecutive chunks, wherever
+              the character splitter (not AST boundaries) is doing the
+              splitting.
 
     Returns:
         List of chunk dicts: {"path", "chunk_index", "content"}.
         (repo_id gets attached one level up, in chunk_files — this function
         doesn't know which repo it belongs to.)
     """
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=overlap,
-        # Separator priority: try the "nicest" break point first, only fall
-        # back to a raw character cut if nothing better fits. This is what
-        # keeps a chunk boundary from slicing through the middle of a
-        # function or sentence when it can be avoided.
-        separators=["\n\n", "\n", " ", ""],
-    )
+    ast_result = ast_chunker.chunk_code_file(path, content, chunk_size, overlap)
+    if ast_result is not None:
+        return ast_result
 
-    raw_chunks = splitter.split_text(content)  # flat list of strings, no metadata yet
-
+    raw_chunks = split_text(content, chunk_size, overlap)
     return [
         {
             "path": path,
-            "chunk_index": i,       # position within the file — useful for debugging/ordering
-            "content": chunk_text,  # the actual text that gets embedded
+            "chunk_index": i,
+            "content": chunk_text,
         }
         for i, chunk_text in enumerate(raw_chunks)
     ]
